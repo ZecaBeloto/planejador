@@ -151,6 +151,8 @@ async function cadastrar() {
   const erroEl   = document.getElementById('formErro');
   const btn      = document.getElementById('btnCadastrar');
 
+  if (btn.disabled) return; // Enter repetido enquanto o envio anterior está em andamento
+
   erroEl.textContent = '';
 
   if (!nome || !whatsapp || !email) {

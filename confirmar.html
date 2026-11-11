@@ -28,8 +28,9 @@
 
         <div class="email-sent">
           <div class="email-icon">✉</div>
-          <h3 id="titulo">Confirmando seu e-mail…</h3>
-          <p id="mensagem" role="status">Só um instante.</p>
+          <h3 id="titulo">Confirme seu e-mail</h3>
+          <p id="mensagem" role="status">Clique no botão abaixo para liberar o acesso ao Planejador Financeiro.</p>
+          <button class="btn-register" id="btnConfirmar" type="button">✓ Confirmar e-mail</button>
           <a class="btn-outline" id="voltar" href="index.html" hidden>← Voltar à página inicial</a>
         </div>
       </div>
@@ -43,18 +44,37 @@
   // Tira o token da barra de endereço e do histórico.
   try { history.replaceState(null, '', 'confirmar.html'); } catch (e) { /* segue */ }
 
+  var botao = document.getElementById('btnConfirmar');
+
   function falhar(texto) {
     document.getElementById('titulo').textContent = 'Não foi possível confirmar';
     document.getElementById('mensagem').textContent = texto;
     document.getElementById('voltar').hidden = false;
+    botao.hidden = true;
   }
 
   if (!token) {
     falhar('Link inválido, expirado ou já utilizado. Peça um novo link na página inicial.');
     return;
   }
+
+  // Só confirma com o clique: antivírus de e-mail que abrem links sozinhos não gastam o link.
+  botao.addEventListener('click', function () {
+    botao.disabled = true;
+    botao.textContent = 'Confirmando…';
+    confirmarAgora();
+  });
+
+  function confirmarAgora() {
   chamar('confirmar', { token: token }).then(function (r) {
     if (!r.ok) {
+      // Falha de conexão: o link pode não ter sido usado; deixa tentar de novo.
+      if (r.erro === 'Erro de conexão. Tente novamente.') {
+        botao.disabled = false;
+        botao.textContent = '✓ Confirmar e-mail';
+        document.getElementById('mensagem').textContent = r.erro;
+        return;
+      }
       // Um link já usado por quem já tem acesso neste navegador: basta seguir.
       if (lerChave()) {
         chamar('sessao', { chave: lerChave() }).then(function (s) {
@@ -71,8 +91,10 @@
     document.getElementById('step3').classList.add('active');
     document.getElementById('titulo').textContent = 'E-mail confirmado';
     document.getElementById('mensagem').textContent = 'Abrindo o planejador…';
+    botao.hidden = true;
     location.replace('planner.html');
   });
+  }
 })();
 </script>
 </body>

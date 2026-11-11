@@ -74,18 +74,15 @@ function novoSegredo() {
 
 function resumo(valor) {
   var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(valor), Utilities.Charset.UTF_8);
-  return Utilities.base64EncodeWebSafe(bytes);
+  // O prefixo impede que a planilha leia como fórmula um resumo que comece com "-".
+  return 'h' + Utilities.base64EncodeWebSafe(bytes);
 }
 
 // Texto digitado pelo visitante não pode virar fórmula na planilha do dono.
+// A planilha guarda o texto sem o apóstrofo: ao copiar um valor lido dela, proteja de novo.
 function celula(s) {
   s = String(s == null ? '' : s);
   return /^[=+\-@]/.test(s) ? "'" + s : s;
-}
-
-function semApostrofo(s) {
-  s = String(s == null ? '' : s);
-  return s.charAt(0) === "'" ? s.slice(1) : s;
 }
 
 // ── Planilha ───────────────────────────────────────────────────
@@ -165,11 +162,11 @@ function cadastrar(p) {
   var d = v.dados;
   var cache = CacheService.getScriptCache();
   var chaveCache = 'env_' + resumo(d.email);
-  if (cache.get(chaveCache)) {
-    return { ok: false, erro: 'Já enviamos um link há pouco. Aguarde um minuto e confira também o spam.' };
-  }
   var token = novoSegredo();
-  comLock(function () {
+  // Confere e marca o reenvio dentro do lock e antes de enviar: pedidos simultâneos mandam um e-mail só.
+  var recusado = comLock(function () {
+    if (cache.get(chaveCache)) return true;
+    cache.put(chaveCache, '1', RESEND_SECONDS);
     var ss = planilha();
     var contatos = ss.getSheetByName(ABA_CONTATOS);
     var achado = linhaDoEmail(contatos, d.email);
@@ -183,14 +180,18 @@ function cadastrar(p) {
       pendWhats = celula(d.whatsapp);
     }
     ss.getSheetByName(ABA_TOKENS).appendRow(['confirmacao', resumo(token), d.email, agora() + CONFIRM_TTL_MS, '', pendNome, pendWhats]);
+    return false;
   });
+  if (recusado) {
+    return { ok: false, erro: 'Já enviamos um link há pouco. Aguarde um minuto e confira também o spam.' };
+  }
   try {
     enviarConfirmacao(d.email, d.nome, SITE_URL + 'confirmar.html?t=' + token);
   } catch (err) {
     console.error('envio falhou: ' + err);
+    cache.remove(chaveCache); // deixa tentar de novo logo
     return { ok: false, erro: 'Não foi possível enviar o e-mail. Tente novamente.' };
   }
-  cache.put(chaveCache, '1', RESEND_SECONDS);
   return { ok: true };
 }
 
@@ -210,7 +211,7 @@ function confirmar(p) {
     var agoraData = new Date(agora());
     var nome = c.values[C_NOME - 1];
     if (t.values[T_NOME - 1]) {
-      contatos.getRange(c.row, C_NOME, 1, 2).setValues([[t.values[T_NOME - 1], t.values[T_WHATS - 1]]]);
+      contatos.getRange(c.row, C_NOME, 1, 2).setValues([[celula(t.values[T_NOME - 1]), celula(t.values[T_WHATS - 1])]]);
       nome = t.values[T_NOME - 1];
     }
     contatos.getRange(c.row, C_CONF).setValue('Sim');
@@ -219,7 +220,7 @@ function confirmar(p) {
     var chave = novoSegredo();
     var expira = agora() + SESSION_TTL_MS;
     tokens.appendRow(['sessao', resumo(chave), email, expira, '', '', '']);
-    nome = semApostrofo(nome);
+    nome = String(nome);
     CacheService.getScriptCache().put('ses_' + resumo(chave), JSON.stringify({ email: email, nome: nome, expira: expira }), SESSION_CACHE_SECONDS);
     return { ok: true, chave: chave, nome: nome };
   });
@@ -243,7 +244,7 @@ function validarChave(chave) {
   var email = t.values[T_EMAIL - 1];
   var c = linhaDoEmail(ss.getSheetByName(ABA_CONTATOS), email);
   if (!c) return null;
-  var sessaoAtual = { email: email, nome: semApostrofo(c.values[C_NOME - 1]), expira: Number(t.values[T_EXPIRA - 1]) };
+  var sessaoAtual = { email: email, nome: String(c.values[C_NOME - 1]), expira: Number(t.values[T_EXPIRA - 1]) };
   var ttl = Math.min(SESSION_CACHE_SECONDS, Math.floor((sessaoAtual.expira - agora()) / 1000));
   if (ttl > 0) cache.put('ses_' + hash, JSON.stringify(sessaoAtual), ttl);
   return sessaoAtual;

@@ -60,7 +60,8 @@ function validarCadastro(dados) {
   var whatsapp = texto(dados.whatsapp);
   var email = normalizarEmail(dados.email).slice(0, MAX_TEXTO);
   if (!nome || !whatsapp || !email) return { ok: false, erro: 'Preencha todos os campos.' };
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, erro: 'Informe um e-mail válido.' };
+  // Começa por letra, número ou _: um e-mail iniciado por = + - @ viraria fórmula na planilha.
+  if (!/^[a-z0-9_][^\s@]*@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, erro: 'Informe um e-mail válido.' };
   return { ok: true, dados: { nome: nome, whatsapp: whatsapp, email: email } };
 }
 
