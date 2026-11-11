@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<title>Confirmar e-mail — Helio Beloto Jr</title>
+<link rel="stylesheet" href="static/style.css">
+<script src="static/config.js"></script>
+<script src="static/api.js"></script>
+</head>
+<body>
+
+<div class="landing">
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-badge">Assessor de Investimentos</div>
+      <h1 class="hero-title">Helio Beloto <span class="accent">Jr</span></h1>
+
+      <div class="register-card">
+        <div class="rc-header">
+          <div class="rc-step" id="step1"><span class="step-num">1</span> Seus dados</div>
+          <div class="rc-divider"></div>
+          <div class="rc-step active" id="step2"><span class="step-num">2</span> Confirmar e-mail</div>
+          <div class="rc-divider"></div>
+          <div class="rc-step" id="step3"><span class="step-num">3</span> Acessar</div>
+        </div>
+
+        <div class="email-sent">
+          <div class="email-icon">✉</div>
+          <h3 id="titulo">Confirmando seu e-mail…</h3>
+          <p id="mensagem" role="status">Só um instante.</p>
+          <a class="btn-outline" id="voltar" href="index.html" hidden>← Voltar à página inicial</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var token = new URLSearchParams(location.search).get('t') || '';
+  // Tira o token da barra de endereço e do histórico.
+  try { history.replaceState(null, '', 'confirmar.html'); } catch (e) { /* segue */ }
+
+  function falhar(texto) {
+    document.getElementById('titulo').textContent = 'Não foi possível confirmar';
+    document.getElementById('mensagem').textContent = texto;
+    document.getElementById('voltar').hidden = false;
+  }
+
+  if (!token) {
+    falhar('Link inválido, expirado ou já utilizado. Peça um novo link na página inicial.');
+    return;
+  }
+  chamar('confirmar', { token: token }).then(function (r) {
+    if (!r.ok) {
+      // Um link já usado por quem já tem acesso neste navegador: basta seguir.
+      if (lerChave()) {
+        chamar('sessao', { chave: lerChave() }).then(function (s) {
+          if (s.ok) location.replace('planner.html');
+          else falhar(r.erro);
+        });
+        return;
+      }
+      falhar(r.erro);
+      return;
+    }
+    salvarChave(r.chave);
+    document.getElementById('step2').classList.remove('active');
+    document.getElementById('step3').classList.add('active');
+    document.getElementById('titulo').textContent = 'E-mail confirmado';
+    document.getElementById('mensagem').textContent = 'Abrindo o planejador…';
+    location.replace('planner.html');
+  });
+})();
+</script>
+</body>
+</html>
