@@ -113,7 +113,7 @@ function montarEmailConfirmacao(nome, link) {
 '      <a href="' + escaparHtml(link) + '"\n' +
 '         style="display:inline-block;padding:13px 28px;\n' +
 '                background:linear-gradient(135deg,#c8a96e,#a8893e);\n' +
-'                color:#0e0f11;font-size:14px;font-weight:700;\n' +
+'                color:#4a8fd4;font-size:14px;font-weight:700;\n' +
 '                text-decoration:none;border-radius:8px">\n' +
 '        ✓ Confirmar e-mail\n' +
 '      </a>\n' +
