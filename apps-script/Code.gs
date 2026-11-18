@@ -129,6 +129,15 @@ function linhaDoEmail(aba, email) {
   return null;
 }
 
+// Linha logo abaixo do último contato com e-mail (a coluna H tem caixinhas até o fim da aba).
+function proximaLinhaContatos(aba) {
+  var rows = aba.getDataRange().getValues();
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][C_EMAIL - 1]).trim()) return i + 2;
+  }
+  return 2;
+}
+
 function tokenValido(aba, tipo, hash) {
   var rows = aba.getDataRange().getValues();
   for (var i = rows.length - 1; i >= 1; i--) {
@@ -206,7 +215,9 @@ function cadastrar(p) {
     var achado = linhaDoEmail(contatos, d.email);
     var pendNome = '', pendWhats = '';
     if (!achado) {
-      contatos.appendRow([celula(d.nome), celula(d.whatsapp), d.email, 'Não', new Date(agora()), '', '']);
+      // Não usar appendRow: as caixinhas da coluna H contam como linhas ocupadas até o fim da aba.
+      contatos.getRange(proximaLinhaContatos(contatos), 1, 1, 7)
+        .setValues([[celula(d.nome), celula(d.whatsapp), d.email, 'Não', new Date(agora()), '', '']]);
     } else if (achado.values[C_CONF - 1] !== 'Sim') {
       contatos.getRange(achado.row, C_NOME, 1, 2).setValues([[celula(d.nome), celula(d.whatsapp)]]);
     } else {

