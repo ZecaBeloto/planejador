@@ -10,12 +10,12 @@ var REMETENTE = { name: 'Helio Beloto Jr', email: 'heliobelotojr@gmail.com' };
 
 var ABA_CONTATOS = 'Contatos';
 var ABA_TOKENS = 'Tokens';
-var CABECALHO_CONTATOS = ['Nome', 'WhatsApp', 'E-mail', 'Confirmado', 'Cadastrado em', 'Confirmado em', 'Último acesso'];
-var CABECALHO_TOKENS = ['Tipo', 'Hash', 'E-mail', 'Expira (ms)', 'Usado', 'Nome pendente', 'WhatsApp pendente'];
+var CABECALHO_CONTATOS = ['Nome', 'WhatsApp', 'E-mail', 'Confirmado', 'Cadastrado em', 'Confirmado em', 'Último acesso', 'Gerar link', 'Link manual', 'Observação'];
+var CABECALHO_TOKENS = ['Tipo', 'Hash', 'E-mail', 'Expira (ms)', 'Usado', 'Nome pendente', 'WhatsApp pendente', 'Origem'];
 // Colunas (base 1) da aba Contatos.
-var C_NOME = 1, C_WHATS = 2, C_EMAIL = 3, C_CONF = 4, C_CAD = 5, C_CONF_EM = 6, C_ACESSO = 7;
+var C_NOME = 1, C_WHATS = 2, C_EMAIL = 3, C_CONF = 4, C_CAD = 5, C_CONF_EM = 6, C_ACESSO = 7, C_GERAR = 8, C_LINK = 9, C_OBS = 10;
 // Colunas (base 1) da aba Tokens.
-var T_TIPO = 1, T_HASH = 2, T_EMAIL = 3, T_EXPIRA = 4, T_USADO = 5, T_NOME = 6, T_WHATS = 7;
+var T_TIPO = 1, T_HASH = 2, T_EMAIL = 3, T_EXPIRA = 4, T_USADO = 5, T_NOME = 6, T_WHATS = 7, T_ORIGEM = 8;
 
 var ERRO_SESSAO = { ok: false, codigo: 'sessao', erro: 'Sua sessão expirou. Entre novamente.' };
 var ERRO_LINK = 'Link inválido, expirado ou já utilizado. Peça um novo link na página inicial.';
@@ -37,7 +37,41 @@ function setup() {
   tokens.appendRow(CABECALHO_TOKENS);
   tokens.hideSheet();
   PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
+  instalarLiberacaoManual();
   return ss.getId();
+}
+
+// Rodar uma vez no editor (já incluído no setup): cabeçalhos novos, caixinhas "Gerar link"
+// na coluna H e o acionador que gera o link quando o dono marca uma caixinha.
+function instalarLiberacaoManual() {
+  var ss = planilha();
+  var contatos = ss.getSheetByName(ABA_CONTATOS);
+  contatos.getRange(1, 1, 1, CABECALHO_CONTATOS.length).setValues([CABECALHO_CONTATOS]);
+  contatos.getRange(1, 1, 1, CABECALHO_CONTATOS.length).setFontWeight('bold');
+  contatos.getRange('H2:H').setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  ss.getSheetByName(ABA_TOKENS).getRange(1, 1, 1, CABECALHO_TOKENS.length).setValues([CABECALHO_TOKENS]);
+  var existe = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'aoEditarPlanilha'; });
+  if (!existe) ScriptApp.newTrigger('aoEditarPlanilha').forSpreadsheet(ss.getId()).onEdit().create();
+}
+
+// Acionador da planilha: caixinha "Gerar link" marcada → link de acesso novo (24 h) na coluna "Link manual",
+// para o dono mandar por WhatsApp a quem não consegue usar o link do e-mail. Não envia e-mail.
+function aoEditarPlanilha(e) {
+  var r = e && e.range;
+  if (!r || r.getSheet().getName() !== ABA_CONTATOS) return;
+  if (r.getColumn() > C_GERAR || r.getColumn() + r.getNumColumns() - 1 < C_GERAR) return;
+  var aba = r.getSheet();
+  comLock(function () {
+    for (var row = Math.max(2, r.getRow()); row < r.getRow() + r.getNumRows(); row++) {
+      if (aba.getRange(row, C_GERAR).getValue() !== true) continue;
+      aba.getRange(row, C_GERAR).setValue(false);
+      var email = String(aba.getRange(row, C_EMAIL).getValue()).trim().toLowerCase();
+      if (!email) continue;
+      var token = novoSegredo();
+      planilha().getSheetByName(ABA_TOKENS).appendRow(['confirmacao', resumo(token), email, agora() + CONFIRM_TTL_MS, '', '', '', 'manual']);
+      aba.getRange(row, C_LINK).setValue(SITE_URL + 'confirmar.html?t=' + token);
+    }
+  });
 }
 
 function planilha() {
@@ -215,6 +249,10 @@ function confirmar(p) {
       nome = t.values[T_NOME - 1];
     }
     contatos.getRange(c.row, C_CONF).setValue('Sim');
+    if (t.values[T_ORIGEM - 1] === 'manual') {
+      contatos.getRange(c.row, C_OBS).setValue('Liberado manualmente (link enviado pelo dono, e-mail não verificado)');
+      contatos.getRange(c.row, C_LINK).setValue('');
+    }
     if (!c.values[C_CONF_EM - 1]) contatos.getRange(c.row, C_CONF_EM).setValue(agoraData);
     contatos.getRange(c.row, C_ACESSO).setValue(agoraData);
     var chave = novoSegredo();

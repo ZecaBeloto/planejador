@@ -23,7 +23,7 @@ function armazenar(v) {
 
 function makeSheet(name) {
   const sheet = {
-    name, rows: [], hidden: false,
+    name, rows: [], hidden: false, validations: [],
     getName: () => sheet.name,
     setName: (n) => { sheet.name = n; return sheet; },
     getLastRow: () => sheet.rows.length,
@@ -33,6 +33,10 @@ function makeSheet(name) {
     setFrozenRows: () => {},
     setColumnWidth: () => {},
     getRange: (r, c, nr = 1, nc = 1) => {
+      if (typeof r === 'string') { // só o formato "H2:H" (coluna aberta)
+        const m = r.match(/^([A-Z])(\d+):[A-Z]$/);
+        c = m[1].charCodeAt(0) - 64; r = Number(m[2]); nr = 1; nc = 1;
+      }
       const ensure = () => {
         while (sheet.rows.length < r + nr - 1) sheet.rows.push([]);
       };
@@ -42,6 +46,7 @@ function makeSheet(name) {
         setValues: (vals) => { ensure(); vals.forEach((row, i) => row.forEach((v, j) => { sheet.rows[r - 1 + i][c - 1 + j] = armazenar(v); })); },
         setValue: (v) => { ensure(); sheet.rows[r - 1][c - 1] = armazenar(v); },
         setFontWeight: () => {},
+        setDataValidation: (rule) => { sheet.validations.push({ r, c, nr, nc, rule }); },
       };
     },
   };
@@ -64,13 +69,19 @@ function world(opts = {}) {
   const mails = [];
   const http = { status: opts.brevoStatus || 201 };
   let uuid = 0;
+  const triggers = [];
   const context = {
+    ScriptApp: {
+      getProjectTriggers: () => triggers.slice(),
+      newTrigger: (fn) => ({ forSpreadsheet: (id) => ({ onEdit: () => ({ create: () => { const t = { fn, id, getHandlerFunction: () => fn }; triggers.push(t); return t; } }) }) }),
+    },
     console: { log: () => {}, error: () => {} },
     JSON, Math, Date, Object, Array, String, Number, isFinite,
     SpreadsheetApp: {
       create: () => { sheets.push(makeSheet('Página1')); return ss; },
       openById: () => ss,
       flush: () => {},
+      newDataValidation: () => ({ requireCheckbox: () => ({ build: () => 'checkbox' }) }),
     },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; } }) },
     CacheService: { getScriptCache: () => ({ get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = String(v); }, remove: (k) => { delete cache[k]; } }) },
@@ -99,7 +110,13 @@ function world(opts = {}) {
     const html = mails.length ? mails[mails.length - 1].htmlBody : JSON.parse(fetches[fetches.length - 1].o.payload).htmlContent;
     return html.match(/confirmar\.html\?t=([A-Za-z0-9]+)/)[1];
   };
-  return { context, ss, props, cache, fetches, mails, http, clock, call, contatos, tokens, clearCache, ultimoToken };
+  // Simula o dono marcando (ou desmarcando) a caixinha "Gerar link" de uma linha da aba Contatos.
+  const marcar = (row, valor = 'TRUE', col = 8, aba = 'Contatos') => {
+    const sheet = ss.getSheetByName(aba);
+    sheet.getRange(row, col).setValue(valor === 'TRUE');
+    context.aoEditarPlanilha({ value: valor, range: { getSheet: () => sheet, getRow: () => row, getColumn: () => col, getNumRows: () => 1, getNumColumns: () => 1 } });
+  };
+  return { context, ss, props, cache, fetches, mails, http, clock, call, contatos, tokens, clearCache, ultimoToken, triggers, marcar };
 }
 
 const ana = { action: 'cadastrar', nome: 'Ana', whatsapp: '(14) 99999-0000', email: 'ana@x.com' };
@@ -111,9 +128,72 @@ function entrar(w, dados = ana) {
 
 test('setup cria as abas Contatos e Tokens (oculta)', () => {
   const w = world();
-  assert.deepEqual(w.contatos()[0], ['Nome', 'WhatsApp', 'E-mail', 'Confirmado', 'Cadastrado em', 'Confirmado em', 'Último acesso']);
+  assert.deepEqual(w.contatos()[0], ['Nome', 'WhatsApp', 'E-mail', 'Confirmado', 'Cadastrado em', 'Confirmado em', 'Último acesso', 'Gerar link', 'Link manual', 'Observação']);
   assert.equal(w.ss.getSheetByName('Tokens').hidden, true);
   assert.equal(w.props.SPREADSHEET_ID, 'ss1');
+});
+
+test('instalarLiberacaoManual põe caixinhas na coluna H e um acionador, sem duplicar', () => {
+  const w = world();
+  w.context.instalarLiberacaoManual();
+  w.context.instalarLiberacaoManual();
+  assert.equal(w.triggers.length, 1);
+  assert.equal(w.triggers[0].fn, 'aoEditarPlanilha');
+  assert.equal(w.contatos()[0].length, 10);
+  const v = w.ss.getSheetByName('Contatos').validations;
+  assert.ok(v.length >= 1);
+  assert.deepEqual([v[0].r, v[0].c, v[0].rule], [2, 8, 'checkbox']);
+});
+
+test('marcar "Gerar link" escreve o link, desmarca a caixinha e não envia e-mail', () => {
+  const w = world();
+  w.call(ana);
+  const enviados = w.fetches.length + w.mails.length;
+  w.marcar(2);
+  const linha = w.contatos()[1];
+  assert.equal(linha[7], false);
+  assert.match(linha[8], /^https:\/\/zecabeloto\.github\.io\/planejador\/confirmar\.html\?t=[a-f0-9]{64}$/);
+  assert.equal(w.fetches.length + w.mails.length, enviados);
+});
+
+test('link manual confirma, marca "Liberado manualmente" e limpa o link', () => {
+  const w = world();
+  w.call(ana);
+  w.marcar(2);
+  const token = w.contatos()[1][8].split('t=')[1];
+  const r = w.call({ action: 'confirmar', token });
+  assert.equal(r.ok, true);
+  const linha = w.contatos()[1];
+  assert.equal(linha[3], 'Sim');
+  assert.equal(linha[8], '');
+  assert.match(linha[9], /^Liberado manualmente/);
+});
+
+test('confirmação pelo e-mail não marca observação', () => {
+  const w = world();
+  entrar(w);
+  assert.equal(w.contatos()[1][9] || '', '');
+});
+
+test('link manual vence em 24 horas', () => {
+  const w = world();
+  w.call(ana);
+  w.marcar(2);
+  const token = w.contatos()[1][8].split('t=')[1];
+  w.clock.now += 24 * HORA + 1000;
+  assert.equal(w.call({ action: 'confirmar', token }).ok, false);
+});
+
+test('edições fora da caixinha são ignoradas', () => {
+  const w = world();
+  w.call(ana);
+  const antes = w.tokens().length;
+  w.marcar(2, 'FALSE');              // desmarcar
+  w.marcar(1);                        // cabeçalho
+  w.marcar(2, 'TRUE', 1);             // outra coluna
+  w.marcar(5);                        // linha sem e-mail
+  assert.equal(w.tokens().length, antes);
+  assert.equal(w.contatos()[1][8] || '', '');
 });
 
 test('cadastro novo grava "Não", envia pelo Brevo e guarda só o hash do token', () => {
